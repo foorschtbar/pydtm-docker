@@ -2,7 +2,7 @@ name: CI Workflow
 
 env:
   DOCKERHUB_TAG: "foorschtbar/pydtm"
-  DOCKERHUB_SHORT_DESCRIPTION: "Docker Container for pydtm"
+  DOCKERHUB_SHORT_DESCRIPTION: "Docker Container for pydtm (Python (Euro)DOCSIS (3.0) Traffic Meter)"
   DOCKERHUB_README_FILE: "README.md"
 
 on:
