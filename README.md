@@ -78,7 +78,7 @@ usb 1-1.4: DVB: registering adapter 0 frontend 0 (Panasonic MN88472)...
 dvbdev: dvb_create_media_entity: media entity 'Panasonic MN88472' registered.
 dvb-usb: Microsoft Xbox One Digital TV Tuner successfully initialized and connected.
 [...]
-]mn88472 11-0018: downloading firmware from file 'dvb-demod-mn88472-02.fw'
+mn88472 11-0018: downloading firmware from file 'dvb-demod-mn88472-02.fw'
 ```
 
 ## Credits
