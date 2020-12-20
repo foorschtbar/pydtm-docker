@@ -26,6 +26,8 @@ import select
 import socket
 import time
 import timeit
+import json
+from influxdb import InfluxDBClient
 #from pprint import pprint
 #from inspect import getmembers
 
@@ -126,8 +128,9 @@ def parse_arguments():
         description="pydtm - measure EuroDOCSIS 3.0 data rate",
         epilog="Note: By default, each frequency is scanned for step/num(frequencies) seconds. "
         "All parameters can also be passed as environment variables, e.g. PYDTM_ADAPTER, "
-        "PYDTM_CARBON, PYDTM_DEBUG, PYDTM_FREQUENCIES, PYDTM_PREFIX, PYDTM_STEP and"
-        "PYTDM_TUNER.",
+        "PYDTM_INFLUXDB_HOST, PYDTM_INFLUXDB_PORT, PYDTM_INFLUXDB_USERNAME, PYDTM_INFLUXDB_PASSWORD, "
+        "PYDTM_INFLUXDB_DATABASE, PYDTM_DEBUG, PYDTM_FREQUENCIES, PYDTM_STEP, PYTDM_TUNER and "
+        "PYDTM_LOCKTIME"
     )
     # add arguments
     parser.add_argument(
@@ -138,11 +141,39 @@ def parse_arguments():
         help="use /dev/dvb/adapterN devices (default: 0)",
     )
     parser.add_argument(
-        "-c",
-        "--carbon",
+        "-ih",
+        "--influx-host",
         type=str,
-        default="localhost:2003",
-        help="address:port of carbon sink (default: localhost:2003)",
+        default="localhost",
+        help="address of influxdb (default: localhost)",
+    )
+    parser.add_argument(
+        "-ihp",
+        "--influx-port",
+        type=str,
+        default="8086",
+        help="port of influxdb (default: 8086)",
+    )
+    parser.add_argument(
+        "-iu",
+        "--influx-username",
+        type=str,
+        default="influx",
+        help="username for influxdb (default: influx)",
+    )
+    parser.add_argument(
+        "-ip",
+        "--influx-password",
+        type=str,
+        default="",
+        help="password for influxdb (default: empty)",
+    )
+    parser.add_argument(
+        "-id",
+        "--influx-database",
+        type=str,
+        default="pydtm",
+        help="database name for influxdb (default: pydtm)",
     )
     parser.add_argument(
         "-d",
@@ -160,13 +191,6 @@ def parse_arguments():
         ),
     )
     parser.add_argument(
-        "-p",
-        "--prefix",
-        type=str,
-        default="docsis",
-        help="carbon prefix/tree location (default: docsis)",
-    )
-    parser.add_argument(
         "-s",
         "--step",
         type=int,
@@ -179,6 +203,13 @@ def parse_arguments():
         type=int,
         default=0,
         help="use adapter's frontendN/dmxN/dvrN devices (default: 0)",
+    )
+    parser.add_argument(
+        "-lt",
+        "--locktime",
+        type=int,
+        default=1,
+        help="locktime for frontend in sec. (default: 1)",
     )
 
     # return parsed arguments
@@ -203,11 +234,22 @@ def eval_envvars(args):
             os.environ["PYDTM_ADAPTER"],
             args.adapter,
         )
-    args.carbon = set_from_env("PYDTM_CARBON", args.carbon)
+    args.influx_host = set_from_env("PYDTM_INFLUXDB_HOST", args.influx_host)
+    args.influx_port = set_from_env("PYDTM_INFLUXDB_PORT", args.influx_port)
+    args.influx_username = set_from_env("PYDTM_INFLUXDB_USERNAME", args.influx_username)
+    args.influx_password = set_from_env("PYDTM_INFLUXDB_PASSWORD", args.influx_password)
+    args.influx_database = set_from_env("PYDTM_INFLUXDB_DATABASE", args.influx_database)
+    try:
+        args.locktime = int(set_from_env("PYDTM_LOCKTIME", args.locktime))
+    except ValueError:
+        LOGGER.error(
+            "error parsing PYDTM_LOCKTIME value %s as integer, using %d instead",
+            os.environ["PYDTM_LOCKTIME"],
+            args.locktime,
+        )
     if "PYDTM_DEBUG" in os.environ:
         args.debug = True
     args.frequencies = set_from_env("PYDTM_FREQUENCIES", args.frequencies)
-    args.prefix = set_from_env("PYDTM_PREFIX", args.prefix)
     try:
         args.step = int(set_from_env("PYDTM_STEP", args.step))
     except ValueError:
@@ -254,39 +296,14 @@ def frequency_list(frequencies):
     return f_list
 
 
-def parse_carbon(carbon):
-    """parse carbon host and port"""
-    # generate carbon destination
-    carbon_host = "localhost"
-    carbon_port = 2003
-    if carbon.find(":") > 0:
-        carbon_host, carbon_port = carbon.split(":")
-        try:
-            carbon_port = int(carbon_port)
-        except ValueError:
-            LOGGER.critical(
-                "unable to parse port %s as an integer, aborting", carbon_port
-            )
-            exit(1)
-    elif carbon.find(":") < 0:
-        carbon_host = carbon
-    else:
-        # colon on first string position, wtf?
-        LOGGER.error("invalid carbon sink, aborting")
-        exit(1)
-    return carbon_host, carbon_port
-
-
 def build_configuration():
     """Build basic configuration."""
     # parse command line arguments first, then evaluate environment
     args = parse_arguments()
     eval_envvars(args)
 
-    # parse frequency list and carbon sink from argument strings
+    # parse frequency list
     frequencies = frequency_list(args.frequencies)
-    args.carbon_host, args.carbon_port = parse_carbon(args.carbon)
-    del args.carbon
 
     # show all settings
     for key, value in vars(args).items():
@@ -304,10 +321,12 @@ def build_configuration():
     return args
 
 
-def tune(fefd, tunable):
+def tune(fefd, tunable, locktime, num, total):
     """tune to given frequency"""
     LOGGER.debug(
-        "tuning to frequency %dMHz with modulation %d",
+        "%d/%d: tuning to frequency %dMHz with modulation %d",
+        num, 
+        total,
         tunable.frequency,
         tunable.modulation,
     )
@@ -341,7 +360,7 @@ def tune(fefd, tunable):
     if fcntl.ioctl(fefd, FE_SET_PROPERTY, dtv_props) == 0:
         # determine wheter the frontend actually has a lock
         # FIXME: why do I need this?
-        time.sleep(1)
+        time.sleep(locktime)
         # make sure the FE has a lock
         festatus = dvb_frontend_status()
         if fcntl.ioctl(fefd, FE_READ_STATUS, festatus) == 0:
@@ -396,6 +415,17 @@ def main():
     else:
         LOGGER.setLevel(logging.DEBUG)
 
+    # dbconnection
+    try:
+        client = InfluxDBClient(host=config.influx_host, port=config.influx_port, username=config.influx_username, password=config.influx_password)
+        client.switch_database(config.influx_database)
+    except:
+        LOGGER.error(
+            "error connecting to influxdb"
+        )
+        exit()
+    
+
     # open the frontend device, demuxer and DVR device
     config.adapter = "/dev/dvb/adapter" + str(config.adapter)
     with open(config.adapter + "/frontend" + str(config.tuner), "r+") as fefd, open(
@@ -410,9 +440,6 @@ def main():
         dvr_poller = select.poll()
         dvr_poller.register(dvrfd, select.POLLIN | select.POLLPRI)
 
-        # create sending socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
         # set appropriate buffer size
         # MPEG-TS are chopped into (at most) 188 sections
         ts_length = 189
@@ -423,18 +450,22 @@ def main():
             exit(1)
 
         # timeout for polling
-        timeout = config.step / len(config.frequencies)
+        frequencies_count = len(frequency_list(config.frequencies))
+        timeout = config.step / frequencies_count
         LOGGER.debug("spending about %ds per frequency with data retrieval", timeout)
 
         # begin main loop
         while True:
             # prepare message array for sending to carbon
-            carbon_messages = []
+            influx_messages = []
+            # for debugging
+            num = 0
             # iterate over all given frequency and modulation paris
             for tunable in frequency_list(config.frequencies):
                 # try to tune and start the filter process
                 count = 0
-                if tune(fefd, tunable) != 0 or start_demuxer(dmxfd) != 0:
+                num += 1
+                if tune(fefd, tunable, config.locktime, num, frequencies_count)  != 0 or start_demuxer(dmxfd) != 0:
                     break
 
                 # make sure we spend at most (step / number of frequencies) second per frequency
@@ -469,15 +500,21 @@ def main():
                     m_type = "qam256"
                 else:
                     m_type = "qam64"
-                carbon_messages.append(
-                    "{}.{}.{} {} {}".format(
-                        config.prefix,
-                        m_type,
-                        tunable.frequency,
-                        (count / elapsed),
-                        int(time.time()),
-                    )
+                influx_messages.append(
+                    {
+                        "measurement": "pydtm",
+                        "tags":{
+                            "name": "{}.{}".format(m_type,tunable.frequency),
+                            "frequency": tunable.frequency,
+                            "modulation": m_type,
+                        },
+                        "fields": {
+                            "speed":round((count * 8 / elapsed) / 1024, 2),
+                        },
+                        "time":int(round(time.time() * 1000)),
+                    }
                 )
+
                 # for debugging purposes, output data
                 LOGGER.debug(
                     "frequency %d: spent %fs, got %d packets (%d bytes) equaling a rate"
@@ -486,15 +523,18 @@ def main():
                     elapsed,
                     len(data) / ts_length,
                     len(data),
-                    (count * 8) / elapsed / 1024,
-                )
-            # send data
-            for msg in carbon_messages:
-                LOGGER.debug("sending to carbon: %s", msg)
-                sock.sendto(
-                    (msg + "\n").encode(), (config.carbon_host, config.carbon_port)
+                    round((count * 8) / elapsed / 1024, 2),
                 )
 
+            # send data
+            LOGGER.debug("sending to influxdb: %s", influx_messages)
+            try:
+                client.write_points(influx_messages, time_precision='ms')
+            except:
+                LOGGER.error(
+                    "error sending to influxdb"
+                )
+            
 
 if __name__ == "__main__":
     main()

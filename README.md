@@ -11,10 +11,14 @@
   ![](https://img.shields.io/github/last-commit/foorschtbar/pydtm-docker?style=plastic)
 ](https://github.com/foorschtbar/pydtm-docker)
 
-Docker Container for [pydtm](https://github.com/cite/pydtm) (Python (Euro)DOCSIS (3.0) Traffic Meter). This tool uses a DVB-C capable video card (e.g. a cheap USB stick) to measure the EuroDOCSIS 3.0 traffic per frequency, allowing you to venture an educated guess about your local segment's utilization. 
+Docker Container for [pydtm](https://github.com/cite/pydtm) (Python (Euro)DOCSIS (3.0) Traffic Meter). This tool uses a DVB-C capable video card (e.g. a cheap USB stick) to measure the EuroDOCSIS 3.0 traffic per frequency, allowing you to send the measurements to a InfluxDB and visualize your local segment's utilization with Grafana. 
 
 * GitHub: [foorschtbar/pydtm-docker](https://github.com/foorschtbar/pydtm-docker)
 * Docker Hub: [foorschtbar/pydtm](https://hub.docker.com/r/foorschtbar/pydtm)
+
+## Example
+
+![](.github/grafana.png)
 
 ## Usage
 
@@ -31,8 +35,13 @@ services:
       - "/dev/dvb"
     environment:
       - PYDTM_FREQUENCIES=114:256,130:256,138:256,146:256,602:256,618:256,626:256,642:256,650:256,658:256,666:256,674:256,682:256,690:256,698:64,706:64,714:64,722:64,730:64,738:64,746:64,754:64,762:64,770:64,778:64,786:64,794:64,802:64,810:64,818:64,826:64,834:64
+      - PYDTM_INFLUXDB_HOST=influxdb.local
+      - PYDTM_INFLUXDB_PORT=8086
+      - PYDTM_INFLUXDB_USERNAME=influx
+      - PYDTM_INFLUXDB_PASSWORD=changeme
+      #- PYDTM_INFLUXDB_DATABASE=pydtm
+      #- PYDTM_LOCKTIME=1
       #- PYDTM_ADAPTER=0
-      #- PYDTM_CARBON=localhost:2003
       #- PYDTM_DEBUG=True
       #- PYDTM_PREFIX=docsis
       #- PYDTM_STEP=60
