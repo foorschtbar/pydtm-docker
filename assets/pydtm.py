@@ -28,8 +28,6 @@ import time
 import timeit
 import json
 from influxdb import InfluxDBClient
-#from pprint import pprint
-#from inspect import getmembers
 
 # init logging
 logging.basicConfig(level=logging.INFO)
@@ -456,7 +454,7 @@ def main():
 
         # begin main loop
         while True:
-            # prepare message array for sending to carbon
+            # prepare message array for sending to influxdb
             influx_messages = []
             # for debugging
             num = 0
@@ -495,7 +493,7 @@ def main():
                 if stop_demuxer(dmxfd) != 0:
                     break
 
-                # append data to carbon message
+                # append data to infuxdb message
                 if tunable.modulation == QAM_256:
                     m_type = "qam256"
                 else:
@@ -527,7 +525,8 @@ def main():
                 )
 
             # send data
-            LOGGER.debug("sending to influxdb: %s", influx_messages)
+            LOGGER.info("sending data to influxdb")
+            LOGGER.debug("data: %s", influx_messages)
             try:
                 client.write_points(influx_messages, time_precision='ms')
             except:
