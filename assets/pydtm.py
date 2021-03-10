@@ -25,12 +25,13 @@ import os
 import select
 import socket
 import time
+import datetime
 import timeit
 import json
 from influxdb import InfluxDBClient
 
 # init logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
 LOGGER = logging.getLogger(__name__)
 
 # DVB constants from Linux kernel files
@@ -127,7 +128,7 @@ def parse_arguments():
         epilog="Note: By default, each frequency is scanned for step/num(frequencies) seconds. "
         "All parameters can also be passed as environment variables, e.g. PYDTM_ADAPTER, "
         "PYDTM_INFLUXDB_HOST, PYDTM_INFLUXDB_PORT, PYDTM_INFLUXDB_USERNAME, PYDTM_INFLUXDB_PASSWORD, "
-        "PYDTM_INFLUXDB_DATABASE, PYDTM_DEBUG, PYDTM_FREQUENCIES, PYDTM_STEP, PYTDM_TUNER and "
+        "PYDTM_INFLUXDB_DATABASE, PYDTM_DEBUG, PYDTM_INTERVAL, PYDTM_FREQUENCIES, PYDTM_STEP, PYTDM_TUNER and "
         "PYDTM_LOCKTIME"
     )
     # add arguments
@@ -176,7 +177,8 @@ def parse_arguments():
     parser.add_argument(
         "-d",
         "--debug",
-        action="store_true",
+        type=bool,
+        default=False,
         help="enable debug logging (default: not enabled)",
     )
     parser.add_argument(
@@ -185,7 +187,7 @@ def parse_arguments():
         type=str,
         default="114:256",  # this is a completely arbitrary value
         help=(
-            "a list of 'frequency' or 'frequency:modulation'" "pairs (default: 546:256)"
+            "a list of 'frequency' or 'frequency:modulation'" "pairs (default: 114:256)"
         ),
     )
     parser.add_argument(
@@ -208,6 +210,13 @@ def parse_arguments():
         type=int,
         default=1,
         help="locktime for frontend in sec. (default: 1)",
+    )
+    parser.add_argument(
+        "-i",
+        "--interval",
+        type=int,
+        default=300,
+        help="amount of seconds to wait between each scan cycle. (default: 300)",
     )
 
     # return parsed arguments
@@ -264,6 +273,14 @@ def eval_envvars(args):
             os.environ["PYDTM_TUNER"],
             args.tuner,
         )
+    try:
+        args.interval = int(set_from_env("PYDTM_INTERVAL", args.interval))
+    except ValueError:
+        LOGGER.error(
+            "error parsing PYDTM_INTERVAL value %s as integer, using %d instead",
+            os.environ["PYDTM_INTERVAL"],
+            args.step,
+        )
 
 
 def frequency_list(frequencies):
@@ -304,8 +321,11 @@ def build_configuration():
     frequencies = frequency_list(args.frequencies)
 
     # show all settings
+    LOGGER.info("Current settings:")
     for key, value in vars(args).items():
-        LOGGER.info("%s=%s", key, value)
+        if key.find("password") != -1:
+            value = "*************"
+        LOGGER.info("  %s=%s", key, value)
 
     # make sure we got at least one second per frequency
     if args.step / len(frequencies) < 1:
@@ -363,15 +383,15 @@ def tune(fefd, tunable, locktime, num, total):
         festatus = dvb_frontend_status()
         if fcntl.ioctl(fefd, FE_READ_STATUS, festatus) == 0:
             if (festatus.status & 0x10) == 0:
-                LOGGER.error("frontend has no lock")
+                LOGGER.error("  frontend has no lock")
                 return -1
         else:
-            LOGGER.error("FE_READ_STATUS failed, unable to verify signal lock")
+            LOGGER.error("  FE_READ_STATUS failed, unable to verify signal lock")
             return -1
     else:
-        LOGGER.error("FE_SET_PROPERTY failed, unable to tune")
+        LOGGER.error("  FE_SET_PROPERTY failed, unable to tune")
         return -1
-    LOGGER.debug("tuning successful")
+    LOGGER.debug("  tuning successful")
     return 0
 
 
@@ -379,7 +399,7 @@ def start_demuxer(dmxfd):
     """start demuxer"""
     # DOCSIS uses the MPEG-TS Packet Identifier 8190
     # tell the demuxer to get us the transport stream
-    LOGGER.debug("starting demuxer")
+    LOGGER.debug("  starting demuxer")
     pesfilter = dmx_pes_filter_params()
     pesfilter.pid = 8190
     pesfilter.input = DMX_IN_FRONTEND
@@ -387,23 +407,25 @@ def start_demuxer(dmxfd):
     pesfilter.pes_type = DMX_PES_OTHER
     pesfilter.flags = DMX_IMMEDIATE_START
     if fcntl.ioctl(dmxfd, DMX_SET_PES_FILTER, pesfilter) != 0:
-        LOGGER.error("unable to start demuxer")
+        LOGGER.error("  unable to start demuxer")
         return -1
-    LOGGER.debug("demuxer initialization successful")
+    LOGGER.debug("  demuxer initialization successful")
     return 0
 
 
 def stop_demuxer(dmxfd):
     """stop demuxer"""
-    LOGGER.debug("stopping demuxer")
+    LOGGER.debug("  stopping demuxer")
     if fcntl.ioctl(dmxfd, DMX_STOP) != 0:
-        LOGGER.error("DMX_STOP failed, unable to stop demuxer (erm, what?)")
+        LOGGER.error("  DMX_STOP failed, unable to stop demuxer (erm, what?)")
         return -1
     return 0
 
 
 def main():
     """run main program"""
+    LOGGER.info("+++ Welcome to pydtm - Python (Euro)DOCSIS (3.0) Traffic Meter! +++ ")
+
     # simulate frequency and modulation list
     config = build_configuration()
 
@@ -442,7 +464,7 @@ def main():
         # MPEG-TS are chopped into (at most) 188 sections
         ts_length = 189
         ts_buffer = ts_length * 2048
-        LOGGER.debug("setting demuxer buffer size to %d", ts_buffer)
+        LOGGER.debug("Setting demuxer buffer size to %d", ts_buffer)
         if fcntl.ioctl(dmxfd, DMX_SET_BUFFER_SIZE, ts_buffer) != 0:
             LOGGER.error("DMX_SET_BUFFER_SIZE failed, aborting")
             exit(1)
@@ -450,12 +472,20 @@ def main():
         # timeout for polling
         frequencies_count = len(frequency_list(config.frequencies))
         timeout = config.step / frequencies_count
-        LOGGER.debug("spending about %ds per frequency with data retrieval", timeout)
+        LOGGER.debug("Spending about %ds per frequency with data retrieval", timeout)
+        
+        LOGGER.debug("--- begin main loop ---")
 
         # begin main loop
         while True:
+            
+            LOGGER.info("Start new scan cycle (%d frequencies)", frequencies_count)
+            total_start_time = datetime.datetime.now()
+            total_speed = 0
+
             # prepare message array for sending to influxdb
             influx_messages = []
+            
             # for debugging
             num = 0
             # iterate over all given frequency and modulation paris
@@ -476,7 +506,7 @@ def main():
                     try:
                         events = dvr_poller.poll(timeout * 1000)
                     except IOError:
-                        LOGGER.warning("event polling was interrupted", exc_info=True)
+                        LOGGER.warning("  event polling was interrupted", exc_info=True)
                         # try to stop the demuxer
                         stop_demuxer(dmxfd)
                         break
@@ -515,7 +545,7 @@ def main():
 
                 # for debugging purposes, output data
                 LOGGER.debug(
-                    "frequency %d: spent %fs, got %d packets (%d bytes) equaling a rate"
+                    "  frequency %d done: spent %fs, got %d packets (%d bytes) equaling a rate"
                     "of %fkBit/s",
                     tunable.frequency,
                     elapsed,
@@ -523,17 +553,40 @@ def main():
                     len(data),
                     round((count * 8) / elapsed / 1024, 2),
                 )
+                total_speed += round((count * 8) / elapsed / 1024, 2)
+
+            total_time_diff = datetime.datetime.now() - total_start_time
+            LOGGER.info("Scan completed in %ds (%d/%d frequencies, %.2f MB/s total).", 
+                total_time_diff.seconds,
+                #datetime.datetime.strftime(total_time_diff, "%M:%S"),
+                num,
+                frequencies_count,
+                total_speed / 1024
+            )
 
             # send data
-            LOGGER.info("sending data to influxdb")
-            LOGGER.debug("data: %s", influx_messages)
+            LOGGER.info("Sending data to database...")
+            LOGGER.debug("Data: %s", influx_messages)
             try:
                 client.write_points(influx_messages, time_precision='ms')
             except:
                 LOGGER.error(
-                    "error sending to influxdb"
+                    "Error sending to database"
+                )
+
+            sleeptime = (config.interval - total_time_diff.seconds)
+            if sleeptime > 0:
+                nextRun = datetime.datetime.now() + datetime.timedelta(seconds=sleeptime)
+                LOGGER.info("Scheduled next run at %s (sleep %ds)",
+                    nextRun.strftime("%Y-%m-%d %H:%M:%S"),
+                    sleeptime
                 )
             
+                time.sleep(sleeptime)
+            else:
+                LOGGER.debug("Start next run immediately")
+            
+                    
 
 if __name__ == "__main__":
     main()

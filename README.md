@@ -20,6 +20,25 @@ Docker Container for [pydtm](https://github.com/cite/pydtm) (Python (Euro)DOCSIS
 
 ![](.github/grafana.png)
 
+## Configuration
+
+Configure  pydtm by specifying environment variables:
+
+Name | Default | Description
+--- | --- | ---
+`PYDTM_DEBUG` | `False` | Enable debug logging
+`PYDTM_ADAPTER` | `0` | Use /dev/dvb/adapterN devices
+`PYTDM_TUNER` | `0` | Use adapter's frontendN/dmxN/dvrN devices
+`PYDTM_FREQUENCIES` | `114:256` | A list of 'frequency' or 'frequency:modulation'-pairs
+`PYDTM_STEP` | `60` | Metrics backend default resolution in seconds
+`PYDTM_LOCKTIME` | `1` | Locktime for frontend in sec.
+`PYDTM_INTERVAL` | `300` | Amount of seconds to wait between each scan cycle
+`PYDTM_INFLUXDB_HOST` | `localhost` | Address of influxdb
+`PYDTM_INFLUXDB_PORT` | `8086` | Port of influxdb
+`PYDTM_INFLUXDB_USERNAME` | `influx` | Username for influxdb
+`PYDTM_INFLUXDB_PASSWORD` | (none) | Password for influxdb
+`PYDTM_INFLUXDB_DATABASE` | `pydtm` | Database name for influxdb
+
 ## Usage
 
 Example docker-compose configuration:
@@ -43,9 +62,9 @@ services:
       #- PYDTM_LOCKTIME=1
       #- PYDTM_ADAPTER=0
       #- PYDTM_DEBUG=True
-      #- PYDTM_PREFIX=docsis
       #- PYDTM_STEP=60
       #- PYDTM_TUNER=0
+      #- PYDTM_INTERVAL=300
 ```
 
 ## FAQ
