@@ -26,7 +26,7 @@ Configure  pydtm by specifying environment variables:
 
 Name | Default | Description
 --- | --- | ---
-`PYDTM_DEBUG` | `False` | Enable debug logging
+`PYDTM_DEBUG` | (none) | Create variable to enable debug logging
 `PYDTM_ADAPTER` | `0` | Use /dev/dvb/adapterN devices
 `PYTDM_TUNER` | `0` | Use adapter's frontendN/dmxN/dvrN devices
 `PYDTM_FREQUENCIES` | `114:256` | A list of 'frequency' or 'frequency:modulation'-pairs
@@ -35,6 +35,7 @@ Name | Default | Description
 `PYDTM_INTERVAL` | `300` | Amount of seconds to wait between each scan cycle
 `PYDTM_INFLUXDB_HOST` | `localhost` | Address of influxdb
 `PYDTM_INFLUXDB_PORT` | `8086` | Port of influxdb
+`PYDTM_INFLUXDB_TLS` | (none) | Create variable to enable TLS for connection
 `PYDTM_INFLUXDB_USERNAME` | `influx` | Username for influxdb
 `PYDTM_INFLUXDB_PASSWORD` | (none) | Password for influxdb
 `PYDTM_INFLUXDB_DATABASE` | `pydtm` | Database name for influxdb

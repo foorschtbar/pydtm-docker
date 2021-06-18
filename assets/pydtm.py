@@ -127,7 +127,7 @@ def parse_arguments():
         description="pydtm - measure EuroDOCSIS 3.0 data rate",
         epilog="Note: By default, each frequency is scanned for step/num(frequencies) seconds. "
         "All parameters can also be passed as environment variables, e.g. PYDTM_ADAPTER, "
-        "PYDTM_INFLUXDB_HOST, PYDTM_INFLUXDB_PORT, PYDTM_INFLUXDB_USERNAME, PYDTM_INFLUXDB_PASSWORD, "
+        "PYDTM_INFLUXDB_HOST, PYDTM_INFLUXDB_PORT, PYDTM_INFLUXDB_TLS, PYDTM_INFLUXDB_USERNAME, PYDTM_INFLUXDB_PASSWORD, "
         "PYDTM_INFLUXDB_DATABASE, PYDTM_DEBUG, PYDTM_INTERVAL, PYDTM_FREQUENCIES, PYDTM_STEP, PYTDM_TUNER and "
         "PYDTM_LOCKTIME"
     )
@@ -166,6 +166,13 @@ def parse_arguments():
         type=str,
         default="",
         help="password for influxdb (default: empty)",
+    )
+    parser.add_argument(
+        "-it",
+        "--influx-tls",
+        type=bool,
+        default=False,
+        help="use TLS/SSL for influxdb connection (default: False)",
     )
     parser.add_argument(
         "-id",
@@ -254,9 +261,15 @@ def eval_envvars(args):
             os.environ["PYDTM_LOCKTIME"],
             args.locktime,
         )
+
+    if "PYDTM_INFLUXDB_TLS" in os.environ:
+        args.influx_tls = True
+
     if "PYDTM_DEBUG" in os.environ:
         args.debug = True
+
     args.frequencies = set_from_env("PYDTM_FREQUENCIES", args.frequencies)
+
     try:
         args.step = int(set_from_env("PYDTM_STEP", args.step))
     except ValueError:
@@ -265,6 +278,7 @@ def eval_envvars(args):
             os.environ["PYDTM_STEP"],
             args.step,
         )
+
     try:
         args.tuner = int(set_from_env("PYDTM_TUNER", args.tuner))
     except ValueError:
@@ -273,6 +287,7 @@ def eval_envvars(args):
             os.environ["PYDTM_TUNER"],
             args.tuner,
         )
+
     try:
         args.interval = int(set_from_env("PYDTM_INTERVAL", args.interval))
     except ValueError:
@@ -281,7 +296,6 @@ def eval_envvars(args):
             os.environ["PYDTM_INTERVAL"],
             args.step,
         )
-
 
 def frequency_list(frequencies):
     """parse frequency list from arguments"""
@@ -437,11 +451,20 @@ def main():
 
     # dbconnection
     try:
-        client = InfluxDBClient(host=config.influx_host, port=config.influx_port, username=config.influx_username, password=config.influx_password)
-        client.switch_database(config.influx_database)
-    except:
+        client = InfluxDBClient(
+            host=config.influx_host,
+            port=config.influx_port,
+            ssl=config.influx_tls,
+            verify_ssl=config.influx_tls,
+            username=config.influx_username,
+            password=config.influx_password,
+            database=config.influx_database
+        )
+
+        client.ping()
+    except Exception as e:
         LOGGER.error(
-            "error connecting to influxdb"
+            f"Error connecting to influxdb: {e}"
         )
         exit()
     
@@ -569,10 +592,11 @@ def main():
             LOGGER.debug("Data: %s", influx_messages)
             try:
                 client.write_points(influx_messages, time_precision='ms')
-            except:
+            except Exception as e:
                 LOGGER.error(
-                    "Error sending to database"
+                    f"Error sending to database: {e}"
                 )
+                
 
             sleeptime = (config.interval - total_time_diff.seconds)
             if sleeptime > 0:
